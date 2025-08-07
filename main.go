@@ -51,6 +51,12 @@ type ScreeningCriteria struct {
 	MaxDValue        float64
 }
 
+// EPSData EPS數據結構
+type EPSData struct {
+	Date  string
+	Value float64
+}
+
 // StockScreener 股票篩選器
 type StockScreener struct {
 	client   *http.Client
@@ -80,35 +86,223 @@ func NewStockScreener() *StockScreener {
 	}
 }
 
-// FetchFinancialData 從公開資訊觀測站取得財務資料
+// FetchFinancialData 從FinMind API取得真實財務資料
 func (s *StockScreener) FetchFinancialData(stockCode string) (*StockData, error) {
 	stock := &StockData{
 		Code: stockCode,
-		// 設定預設值避免篩選時全部被過濾掉
+		// 設定預設值
 		ROE:           10.0, // 預設ROE 10%
 		RevenueGrowth: 3.0,  // 預設營收成長3%
 		DebtRatio:     35.0, // 預設負債比35%
 		DividendYears: 3,    // 預設配息3年
 		GrossMargin:   25.0, // 預設毛利率25%
-		YoYGrowth:     15.0, // 預設年增率15%
-		EPSGrowth:     50.0, // 預設EPS增長50%
-		EPS:           2.0,  // 預設EPS 2元
+		YoYGrowth:     0.0,  // 將從API獲取
+		EPSGrowth:     0.0,  // 將從API獲取
+		EPS:           0.0,  // 將從API獲取
 	}
 
-	// 取得基本面資料 (使用證交所API)
-	fundamentalURL := fmt.Sprintf("https://www.twse.com.tw/exchangeReport/BWIBBU_d?response=json&date=%s&stockNo=%s",
-		time.Now().Format("20060102"), stockCode)
+	// 先嘗試使用 FinMind API 獲取財務數據
+	if err := s.fetchFromFinMind(stock); err != nil {
+		log.Printf("FinMind API 失敗，使用預設值: %v", err)
+		// 如果 FinMind API 失敗，使用原有的 TWSE API 作為後備
+		if err := s.fetchFromTWSE(stock); err != nil {
+			log.Printf("TWSE API 也失敗: %v", err)
+			// 使用預設值
+			stock.YoYGrowth = 15.0
+			stock.EPSGrowth = 50.0
+			stock.EPS = 2.0
+		}
+	}
 
-	resp, err := s.client.Get(fundamentalURL)
+	return stock, nil
+}
+
+// fetchFromFinMind 從FinMind API獲取財務數據
+func (s *StockScreener) fetchFromFinMind(stock *StockData) error {
+	// 獲取過去2年的財務數據用於計算年增率
+	startDate := time.Now().AddDate(-2, 0, 0).Format("2006-01-02")
+	finmindURL := fmt.Sprintf("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id=%s&start_date=%s",
+		stock.Code, startDate)
+
+	resp, err := s.client.Get(finmindURL)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("finMind API request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
-	// 解析JSON回應
+	var response struct {
+		Data []struct {
+			Date       string  `json:"date"`
+			StockID    string  `json:"stock_id"`
+			Type       string  `json:"type"`
+			Value      float64 `json:"value"`
+			OriginName string  `json:"origin_name"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return fmt.Errorf("failed to decode FinMind response: %v", err)
+	}
+
+	// 解析財務數據 - 改為分季度儲存
+
+	var epsData []EPSData
+	var revenueData []EPSData
+
+	for _, item := range response.Data {
+		// 調試：顯示所有數據項目 (限制輸出)
+		if stock.Code == "2330" && (strings.Contains(item.Date, "2024") || strings.Contains(item.Date, "2025")) {
+			fmt.Printf("  調試 - 日期:%s, 類型:%s, 名稱:%s, 數值:%.2f\n",
+				item.Date, item.Type, item.OriginName, item.Value)
+		}
+
+		// 收集所有 EPS 數據
+		if item.Type == "EPS" || strings.Contains(item.OriginName, "每股盈餘") {
+			epsData = append(epsData, EPSData{
+				Date:  item.Date,
+				Value: item.Value,
+			})
+		}
+
+		// 收集所有營收數據
+		if item.Type == "Revenue" || strings.Contains(item.OriginName, "營業收入") {
+			revenueData = append(revenueData, EPSData{
+				Date:  item.Date,
+				Value: item.Value,
+			})
+		}
+	}
+
+	// 計算 EPS 和 EPS 增長率 - 使用同季度比較
+	latestEPS, latestEPSDate := s.getLatestQuarterEPS(epsData)
+	sameQuarterLastYearEPS := s.getSameQuarterLastYearEPS(epsData, latestEPSDate)
+
+	// 設置最新EPS
+	stock.EPS = latestEPS
+
+	// 計算同季度EPS增長率
+	if sameQuarterLastYearEPS > 0 && latestEPS > 0 {
+		stock.EPSGrowth = ((latestEPS - sameQuarterLastYearEPS) / sameQuarterLastYearEPS) * 100
+		fmt.Printf("EPS計算: 最新季(%s)=%.2f vs 去年同季=%.2f, 增長=%.1f%%\n",
+			latestEPSDate, latestEPS, sameQuarterLastYearEPS, stock.EPSGrowth)
+	}
+
+	// 計算營收年增率 - 使用相同邏輯
+	latestRevenue, latestRevenueDate := s.getLatestQuarterRevenue(revenueData)
+	sameQuarterLastYearRevenue := s.getSameQuarterLastYearRevenue(revenueData, latestRevenueDate)
+
+	if sameQuarterLastYearRevenue > 0 && latestRevenue > 0 {
+		stock.YoYGrowth = ((latestRevenue - sameQuarterLastYearRevenue) / sameQuarterLastYearRevenue) * 100
+		stock.RevenueGrowth = stock.YoYGrowth // 同步更新營收成長
+	}
+
+	fmt.Printf("股票 %s FinMind 數據: EPS=%.2f, EPS增長=%.1f%%, 年增率=%.1f%% (ROE使用預設值)\n",
+		stock.Code, stock.EPS, stock.EPSGrowth, stock.YoYGrowth)
+
+	return nil
+}
+
+// getLatestQuarterEPS 取得最新季度的EPS
+func (s *StockScreener) getLatestQuarterEPS(epsData []EPSData) (float64, string) {
+	if len(epsData) == 0 {
+		return 0, ""
+	}
+
+	// 排序找到最新日期
+	latest := epsData[0]
+	for _, data := range epsData {
+		if data.Date > latest.Date {
+			latest = data
+		}
+	}
+
+	return latest.Value, latest.Date
+}
+
+// getSameQuarterLastYearEPS 取得去年同季度的EPS
+func (s *StockScreener) getSameQuarterLastYearEPS(epsData []EPSData, latestDate string) float64 {
+	if latestDate == "" {
+		return 0
+	}
+
+	// 解析最新日期，計算去年同季度
+	t, err := time.Parse("2006-01-02", latestDate)
+	if err != nil {
+		return 0
+	}
+
+	// 計算去年同季度的目標日期
+	lastYear := t.Year() - 1
+	targetDate := fmt.Sprintf("%d-%02d-%02d", lastYear, t.Month(), t.Day())
+
+	// 尋找去年同季度數據
+	for _, data := range epsData {
+		if data.Date == targetDate {
+			return data.Value
+		}
+	}
+
+	return 0
+}
+
+// getLatestQuarterRevenue 取得最新季度的營收
+func (s *StockScreener) getLatestQuarterRevenue(revenueData []EPSData) (float64, string) {
+	if len(revenueData) == 0 {
+		return 0, ""
+	}
+
+	// 排序找到最新日期
+	latest := revenueData[0]
+	for _, data := range revenueData {
+		if data.Date > latest.Date {
+			latest = data
+		}
+	}
+
+	return latest.Value, latest.Date
+}
+
+// getSameQuarterLastYearRevenue 取得去年同季度的營收
+func (s *StockScreener) getSameQuarterLastYearRevenue(revenueData []EPSData, latestDate string) float64 {
+	if latestDate == "" {
+		return 0
+	}
+
+	// 解析最新日期，計算去年同季度
+	t, err := time.Parse("2006-01-02", latestDate)
+	if err != nil {
+		return 0
+	}
+
+	// 計算去年同季度的目標日期
+	lastYear := t.Year() - 1
+	targetDate := fmt.Sprintf("%d-%02d-%02d", lastYear, t.Month(), t.Day())
+
+	// 尋找去年同季度數據
+	for _, data := range revenueData {
+		if data.Date == targetDate {
+			return data.Value
+		}
+	}
+
+	return 0
+}
+
+// fetchFromTWSE 從TWSE API獲取基本數據作為後備
+func (s *StockScreener) fetchFromTWSE(stock *StockData) error {
+	fundamentalURL := fmt.Sprintf("https://www.twse.com.tw/exchangeReport/BWIBBU_d?response=json&date=%s&stockNo=%s",
+		time.Now().Format("20060102"), stock.Code)
+
+	resp, err := s.client.Get(fundamentalURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
 	var data map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
+		return err
 	}
 
 	// 解析財務指標
@@ -121,7 +315,7 @@ func (s *StockScreener) FetchFinancialData(stockCode string) (*StockData, error)
 		}
 	}
 
-	return stock, nil
+	return nil
 }
 
 // FetchTechnicalData 取得技術面資料
@@ -362,7 +556,7 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 	// 先用一些熱門股票做示範
 	stockList := []string{
 		"3379",
-		"2330", // 台積電
+		// "2330", // 台積電
 		// "2454", // 聯發科
 		// "2308", // 台達電
 		// "2886", // 兆豐金
@@ -375,13 +569,13 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 		// "2412", // 中華電
 		// "0050", // 元大台灣50
 		// "0056", // 元大高股息
-		"2603", // 長榮
-		"2609", // 陽明
+		// "2603", // 長榮
+		// "2609", // 陽明
 		// "2881", // 富邦金
 		// "2882", // 國泰金
 		// "2892", // 第一金
 		// "3008", // 大立光
-		"2317", // 鴻海
+		// "2317", // 鴻海
 	}
 
 	return stockList, nil

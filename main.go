@@ -25,6 +25,9 @@ type StockData struct {
 	DebtRatio     float64 `json:"debt_ratio"`
 	GrossMargin   float64 `json:"gross_margin"`
 	DividendYears int     `json:"dividend_years"`
+	YoYGrowth     float64 `json:"yoy_growth"` // 年增率 (Year-over-Year)
+	EPSGrowth     float64 `json:"eps_growth"` // EPS增長率
+	EPS           float64 `json:"eps"`        // 每股盈餘
 	MA60          float64 `json:"ma60"`
 	KValue        float64 `json:"k_value"`
 	DValue        float64 `json:"d_value"`
@@ -38,6 +41,9 @@ type ScreeningCriteria struct {
 	MinRevenueGrowth float64
 	MaxDebtRatio     float64
 	MinDividendYears int
+	MinYoYGrowth     float64 // 最小年增率要求
+	MinEPSGrowth     float64 // 最小EPS增長率要求 (三位數 = 100%)
+	MinEPS           float64 // 最小EPS要求
 	RequireMA60Above bool
 	MinKValue        float64
 	MaxKValue        float64
@@ -62,6 +68,9 @@ func NewStockScreener() *StockScreener {
 			MinRevenueGrowth: -5.0,  // 允許小幅衰退
 			MaxDebtRatio:     60.0,  // 提高負債比容忍度到60%
 			MinDividendYears: 2,     // 降低配息年數要求到2年
+			MinYoYGrowth:     10.0,  // 年增率至少10%
+			MinEPSGrowth:     100.0, // EPS增長至少100% (三位數增長)
+			MinEPS:           1.0,   // 最小EPS要求1元
 			RequireMA60Above: false, // 不強制要求站上MA60
 			MinKValue:        30.0,  // 擴大KD值範圍
 			MaxKValue:        85.0,
@@ -81,6 +90,9 @@ func (s *StockScreener) FetchFinancialData(stockCode string) (*StockData, error)
 		DebtRatio:     35.0, // 預設負債比35%
 		DividendYears: 3,    // 預設配息3年
 		GrossMargin:   25.0, // 預設毛利率25%
+		YoYGrowth:     15.0, // 預設年增率15%
+		EPSGrowth:     50.0, // 預設EPS增長50%
+		EPS:           2.0,  // 預設EPS 2元
 	}
 
 	// 取得基本面資料 (使用證交所API)
@@ -350,7 +362,7 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 	// 先用一些熱門股票做示範
 	stockList := []string{
 		"3379",
-		// "2330", // 台積電
+		"2330", // 台積電
 		// "2454", // 聯發科
 		// "2308", // 台達電
 		// "2886", // 兆豐金
@@ -363,13 +375,13 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 		// "2412", // 中華電
 		// "0050", // 元大台灣50
 		// "0056", // 元大高股息
-		// "2603", // 長榮
-		// "2609", // 陽明
+		"2603", // 長榮
+		"2609", // 陽明
 		// "2881", // 富邦金
 		// "2882", // 國泰金
 		// "2892", // 第一金
 		// "3008", // 大立光
-		// "2317", // 鴻海
+		"2317", // 鴻海
 	}
 
 	return stockList, nil
@@ -467,11 +479,23 @@ func (s *StockScreener) checkStage1Fundamentals(stock *StockData) (bool, []strin
 	if stock.RevenueGrowth <= -20.0 {
 		reasons = append(reasons, fmt.Sprintf("營收大幅衰退 %.1f%% (<-20%%)", stock.RevenueGrowth))
 	}
+	if stock.YoYGrowth <= -30.0 {
+		reasons = append(reasons, fmt.Sprintf("年增率大幅衰退 %.1f%% (<-30%%)", stock.YoYGrowth))
+	}
+	if stock.EPSGrowth <= -50.0 {
+		reasons = append(reasons, fmt.Sprintf("EPS大幅衰退 %.1f%% (<-50%%)", stock.EPSGrowth))
+	}
+	if stock.EPS <= 0 {
+		reasons = append(reasons, "EPS為負數或零")
+	}
 
 	// 顯示數值
 	fmt.Printf("      ROE: %.1f%% %s\n", stock.ROE, s.getStatusIcon(stock.ROE > 0))
 	fmt.Printf("      負債比: %.1f%% %s\n", stock.DebtRatio, s.getStatusIcon(stock.DebtRatio < 80.0))
 	fmt.Printf("      營收成長: %.1f%% %s\n", stock.RevenueGrowth, s.getStatusIcon(stock.RevenueGrowth > -20.0))
+	fmt.Printf("      年增率: %.1f%% %s\n", stock.YoYGrowth, s.getStatusIcon(stock.YoYGrowth > -30.0))
+	fmt.Printf("      EPS增長: %.1f%% %s\n", stock.EPSGrowth, s.getStatusIcon(stock.EPSGrowth > -50.0))
+	fmt.Printf("      EPS: %.2f %s\n", stock.EPS, s.getStatusIcon(stock.EPS > 0))
 
 	return len(reasons) == 0, reasons
 }
@@ -480,7 +504,7 @@ func (s *StockScreener) checkStage1Fundamentals(stock *StockData) (bool, []strin
 func (s *StockScreener) checkStage2Quality(stock *StockData) (bool, []string) {
 	reasons := []string{}
 	passCount := 0
-	totalChecks := 4
+	totalChecks := 7
 
 	fmt.Printf("   💎 投資品質評估:\n")
 
@@ -506,6 +530,39 @@ func (s *StockScreener) checkStage2Quality(stock *StockData) (bool, []string) {
 	} else {
 		fmt.Printf("      營收成長: %.1f%% ❌ (衰退)\n", stock.RevenueGrowth)
 		reasons = append(reasons, fmt.Sprintf("營收衰退 %.1f%%", stock.RevenueGrowth))
+	}
+
+	// 年增率檢查 (新增)
+	if stock.YoYGrowth >= s.criteria.MinYoYGrowth {
+		fmt.Printf("      年增率: %.1f%% ✅ (達標)\n", stock.YoYGrowth)
+		passCount++
+	} else if stock.YoYGrowth >= 0 {
+		fmt.Printf("      年增率: %.1f%% 🟡 (正成長)\n", stock.YoYGrowth)
+		passCount++
+	} else {
+		fmt.Printf("      年增率: %.1f%% ❌ (負成長)\n", stock.YoYGrowth)
+		reasons = append(reasons, fmt.Sprintf("年增率不足 %.1f%%", stock.YoYGrowth))
+	}
+
+	// EPS增長檢查 (新增)
+	if stock.EPSGrowth >= s.criteria.MinEPSGrowth {
+		fmt.Printf("      EPS增長: %.1f%% ✅ (三位數增長)\n", stock.EPSGrowth)
+		passCount++
+	} else if stock.EPSGrowth >= 50.0 {
+		fmt.Printf("      EPS增長: %.1f%% 🟡 (高成長)\n", stock.EPSGrowth)
+		passCount++
+	} else {
+		fmt.Printf("      EPS增長: %.1f%% ❌ (增長不足)\n", stock.EPSGrowth)
+		reasons = append(reasons, fmt.Sprintf("EPS增長不足 %.1f%%", stock.EPSGrowth))
+	}
+
+	// EPS絕對值檢查 (新增)
+	if stock.EPS >= s.criteria.MinEPS {
+		fmt.Printf("      EPS: %.2f ✅ (達標)\n", stock.EPS)
+		passCount++
+	} else {
+		fmt.Printf("      EPS: %.2f ❌ (偏低)\n", stock.EPS)
+		reasons = append(reasons, fmt.Sprintf("EPS偏低 %.2f", stock.EPS))
 	}
 
 	// 負債比檢查
@@ -605,23 +662,26 @@ func (s *StockScreener) getStatusIcon(passed bool) string {
 func (s *StockScreener) calculateScore(stock *StockData) {
 	score := 0.0
 
-	// 基本面評分 (60%)
-	score += math.Min(stock.ROE/30.0, 1.0) * 20                    // ROE評分
-	score += math.Min(stock.RevenueGrowth/20.0, 1.0) * 15          // 營收成長評分
-	score += (1.0 - stock.DebtRatio/100.0) * 15                    // 負債比評分
-	score += math.Min(float64(stock.DividendYears)/10.0, 1.0) * 10 // 配息穩定性
+	// 基本面評分 (70% - 增加權重)
+	score += math.Min(stock.ROE/30.0, 1.0) * 15                   // ROE評分 (降低權重)
+	score += math.Min(stock.RevenueGrowth/20.0, 1.0) * 10         // 營收成長評分 (降低權重)
+	score += math.Min(stock.YoYGrowth/30.0, 1.0) * 15             // 年增率評分 (新增)
+	score += math.Min(stock.EPSGrowth/200.0, 1.0) * 20            // EPS增長評分 (新增，高權重)
+	score += math.Min(stock.EPS/5.0, 1.0) * 5                     // EPS絕對值評分 (新增)
+	score += (1.0 - stock.DebtRatio/100.0) * 10                   // 負債比評分 (降低權重)
+	score += math.Min(float64(stock.DividendYears)/10.0, 1.0) * 5 // 配息穩定性 (降低權重)
 
-	// 技術面評分 (40%)
+	// 技術面評分 (30% - 降低權重)
 	if stock.Price > stock.MA60 {
-		score += 20 // 站上季線
+		score += 15 // 站上季線 (降低權重)
 	}
 
 	// KD值在黃金交叉區間
 	if stock.KValue >= 50 && stock.KValue <= 80 {
-		score += 10
+		score += 8 // 降低權重
 	}
 	if stock.DValue >= 50 && stock.DValue <= 80 {
-		score += 10
+		score += 7 // 降低權重
 	}
 
 	stock.Score = score
@@ -634,6 +694,9 @@ func (s *StockScreener) GenerateReport(stocks []*StockData) {
 	fmt.Println("\n【篩選條件】")
 	fmt.Printf("- ROE > %.1f%%\n", s.criteria.MinROE)
 	fmt.Printf("- 營收年增率 > %.1f%%\n", s.criteria.MinRevenueGrowth)
+	fmt.Printf("- 年增率 > %.1f%%\n", s.criteria.MinYoYGrowth)
+	fmt.Printf("- EPS增長 > %.1f%% (三位數增長)\n", s.criteria.MinEPSGrowth)
+	fmt.Printf("- EPS > %.1f元\n", s.criteria.MinEPS)
 	fmt.Printf("- 負債比 < %.1f%%\n", s.criteria.MaxDebtRatio)
 	fmt.Printf("- 近5年穩定配息\n")
 	fmt.Printf("- 股價在60日均線之上\n")
@@ -647,6 +710,9 @@ func (s *StockScreener) GenerateReport(stocks []*StockData) {
 		fmt.Printf("   綜合評分: %.1f\n", stock.Score)
 		fmt.Printf("   ROE: %.1f%%\n", stock.ROE)
 		fmt.Printf("   營收年增率: %.1f%%\n", stock.RevenueGrowth)
+		fmt.Printf("   年增率: %.1f%%\n", stock.YoYGrowth)
+		fmt.Printf("   EPS增長: %.1f%%\n", stock.EPSGrowth)
+		fmt.Printf("   EPS: %.2f元\n", stock.EPS)
 		fmt.Printf("   負債比: %.1f%%\n", stock.DebtRatio)
 		fmt.Printf("   現價: %.2f | MA60: %.2f\n", stock.Price, stock.MA60)
 		fmt.Printf("   K值: %.1f | D值: %.1f\n", stock.KValue, stock.DValue)

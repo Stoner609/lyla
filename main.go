@@ -202,8 +202,13 @@ func (s *StockScreener) fetchFromFinMind(stock *StockData) error {
 		fmt.Printf("ROE獲取失敗，使用預設值: %v\n", err)
 	}
 
-	fmt.Printf("股票 %s FinMind 數據: EPS=%.2f, EPS增長=%.1f%%, 年增率=%.1f%%, ROE=%.1f%%\n",
-		stock.Code, stock.EPS, stock.EPSGrowth, stock.YoYGrowth, stock.ROE)
+	// 獲取負債比數據
+	if err := s.fetchDebtRatioData(stock); err != nil {
+		fmt.Printf("負債比獲取失敗，使用預設值: %v\n", err)
+	}
+
+	fmt.Printf("股票 %s FinMind 數據: EPS=%.2f, EPS增長=%.1f%%, 年增率=%.1f%%, ROE=%.1f%%, 負債比=%.1f%%\n",
+		stock.Code, stock.EPS, stock.EPSGrowth, stock.YoYGrowth, stock.ROE, stock.DebtRatio)
 
 	return nil
 }
@@ -308,7 +313,7 @@ func (s *StockScreener) fetchROEData(stock *StockData) error {
 
 	// 方法3: 使用行業平均值或經驗公式
 	s.estimateROEFromIndustry(stock)
-	
+
 	return nil
 }
 
@@ -362,7 +367,7 @@ func (s *StockScreener) fetchROEFromTWSE(stock *StockData) error {
 func (s *StockScreener) estimateROEFromDuPont(stock *StockData) error {
 	// DuPont分析: ROE = 淨利率 × 資產周轉率 × 權益乘數
 	// 如果我們有EPS和一些假設，可以做粗略估算
-	
+
 	if stock.EPS <= 0 {
 		return fmt.Errorf("insufficient data for DuPont analysis")
 	}
@@ -370,13 +375,13 @@ func (s *StockScreener) estimateROEFromDuPont(stock *StockData) error {
 	// 根據EPS水準做粗略估算
 	// 這是簡化的啟發式方法
 	var estimatedROE float64
-	
+
 	if stock.EPS >= 10 { // 高EPS通常對應高ROE
-		estimatedROE = 15.0 + (stock.EPS - 10) * 0.5 // 基礎15% + 額外成分
+		estimatedROE = 15.0 + (stock.EPS-10)*0.5 // 基礎15% + 額外成分
 	} else if stock.EPS >= 5 {
-		estimatedROE = 10.0 + (stock.EPS - 5) * 1.0
+		estimatedROE = 10.0 + (stock.EPS-5)*1.0
 	} else if stock.EPS >= 1 {
-		estimatedROE = 5.0 + (stock.EPS - 1) * 1.25
+		estimatedROE = 5.0 + (stock.EPS-1)*1.25
 	} else {
 		estimatedROE = stock.EPS * 5 // 低EPS情況
 	}
@@ -396,9 +401,9 @@ func (s *StockScreener) estimateROEFromDuPont(stock *StockData) error {
 	}
 
 	stock.ROE = estimatedROE
-	fmt.Printf("DuPont估算ROE: 基於EPS=%.2f, YoY=%.1f%%, 估算ROE=%.2f%%\n", 
+	fmt.Printf("DuPont估算ROE: 基於EPS=%.2f, YoY=%.1f%%, 估算ROE=%.2f%%\n",
 		stock.EPS, stock.YoYGrowth, estimatedROE)
-	
+
 	return nil
 }
 
@@ -437,8 +442,103 @@ func (s *StockScreener) estimateROEFromIndustry(stock *StockData) {
 	}
 
 	stock.ROE = industryROE
-	fmt.Printf("行業估算ROE: 股票%s, 行業基準=%.1f%%, 調整後=%.2f%%\n", 
+	fmt.Printf("行業估算ROE: 股票%s, 行業基準=%.1f%%, 調整後=%.2f%%\n",
 		code, industryROE/1.3, stock.ROE)
+}
+
+// fetchDebtRatioData 從FinMind API獲取負債比數據
+func (s *StockScreener) fetchDebtRatioData(stock *StockData) error {
+	// 使用FinMind資產負債表API
+	startDate := time.Now().AddDate(-1, 0, 0).Format("2006-01-02") // 獲取過去1年數據
+	balanceSheetURL := fmt.Sprintf("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockBalanceSheet&data_id=%s&start_date=%s",
+		stock.Code, startDate)
+
+	resp, err := s.client.Get(balanceSheetURL)
+	if err != nil {
+		return fmt.Errorf("FinMind Balance Sheet API request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response struct {
+		Data []struct {
+			Date       string  `json:"date"`
+			StockID    string  `json:"stock_id"`
+			Type       string  `json:"type"`
+			Value      float64 `json:"value"`
+			OriginName string  `json:"origin_name"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return fmt.Errorf("failed to decode FinMind Balance Sheet response: %v", err)
+	}
+
+	// 尋找最新的總資產和總負債數據
+	var latestTotalAssets, latestTotalLiabilities float64
+	var latestDate string
+
+	// 調試：關閉詳細日誌
+	// if stock.Code == "2330" {
+	//     fmt.Printf("資產負債表調試:\n")
+	//     ...
+	// }
+
+	// 收集所有相關數據
+	dataMap := make(map[string]map[string]float64)
+
+	for _, item := range response.Data {
+		if dataMap[item.Date] == nil {
+			dataMap[item.Date] = make(map[string]float64)
+		}
+		dataMap[item.Date][item.Type] = item.Value
+	}
+
+	// 找到最新日期
+	for date := range dataMap {
+		if date > latestDate {
+			latestDate = date
+		}
+	}
+
+	// 獲取最新日期的資產負債數據
+	if latestData, ok := dataMap[latestDate]; ok {
+		// 尋找總資產
+		for key, value := range latestData {
+			if key == "TotalAssets" || strings.Contains(key, "Asset") {
+				latestTotalAssets = value
+				break
+			}
+		}
+
+		// 優先使用已計算好的負債比百分比
+		if liabilitiesPer, exists := latestData["Liabilities_per"]; exists {
+			stock.DebtRatio = liabilitiesPer
+			fmt.Printf("直接使用負債比: 日期=%s, 負債比=%.2f%%\n", latestDate, liabilitiesPer)
+			return nil
+		}
+
+		// 否則尋找負債總額進行計算
+		if liabilities, exists := latestData["Liabilities"]; exists {
+			latestTotalLiabilities = liabilities
+		}
+	}
+
+	// 計算負債比
+	if latestTotalAssets > 0 && latestTotalLiabilities >= 0 {
+		debtRatio := (latestTotalLiabilities / latestTotalAssets) * 100
+
+		// 合理性檢查 (負債比應該在0-100%之間)
+		if debtRatio >= 0 && debtRatio <= 100 {
+			stock.DebtRatio = debtRatio
+			fmt.Printf("負債比計算: 日期=%s, 總資產=%.0f, 總負債=%.0f, 負債比=%.2f%%\n",
+				latestDate, latestTotalAssets, latestTotalLiabilities, debtRatio)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("invalid balance sheet data: assets=%.0f, liabilities=%.0f",
+		latestTotalAssets, latestTotalLiabilities)
 }
 
 // fetchFromTWSE 從TWSE API獲取基本數據作為後備
@@ -711,7 +811,7 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 		"3379",
 		// "2454", // 聯發科
 		// "2308", // 台達電
-		// "2886", // 兆豐金
+		"2886", // 兆豐金
 		// "2884", // 玉山金
 		// "2382", // 廣達
 		// "3231", // 緯創
@@ -722,12 +822,12 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 		// "0050", // 元大台灣50
 		// "0056", // 元大高股息
 		// "2603", // 長榮
-		// "2609", // 陽明
+		"2609", // 陽明
 		// "2881", // 富邦金
 		// "2882", // 國泰金
 		// "2892", // 第一金
 		// "3008", // 大立光
-		// "2317", // 鴻海
+		"2317", // 鴻海
 	}
 
 	return stockList, nil

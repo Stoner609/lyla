@@ -1,0 +1,19 @@
+# 編譯後的執行檔
+stock
+*.exe
+
+# Go 相關文件
+*.log
+
+# IDE 相關文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系統檔案
+.DS_Store
+Thumbs.db
+
+# 篩選結果檔案
+screening_results_*.json

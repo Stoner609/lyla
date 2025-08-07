@@ -124,12 +124,12 @@ func (s *StockScreener) FetchTechnicalData(stock *StockData) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// 添加 User-Agent 和其他 headers 來模擬瀏覽器請求
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "zh-TW,zh;q=0.9,en;q=0.8")
-	
+
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return err
@@ -177,22 +177,22 @@ func (s *StockScreener) FetchTechnicalData(stock *StockData) error {
 	if chart, ok := data["chart"].(map[string]interface{}); ok {
 		if result, ok := chart["result"].([]interface{}); ok && len(result) > 0 {
 			resultData := result[0].(map[string]interface{})
-			
+
 			// 取得股票基本資訊
 			if meta, ok := resultData["meta"].(map[string]interface{}); ok {
 				if currentPrice, ok := meta["regularMarketPrice"].(float64); ok {
 					stock.Price = currentPrice
 				}
 			}
-			
+
 			// 取得OHLC資料
 			if indicators, ok := resultData["indicators"].(map[string]interface{}); ok {
 				if quote, ok := indicators["quote"].([]interface{}); ok && len(quote) > 0 {
 					quoteData := quote[0].(map[string]interface{})
-					
+
 					// 取得收盤價、最高價、最低價資料
 					var closes, highs, lows []float64
-					
+
 					if closesRaw, ok := quoteData["close"].([]interface{}); ok {
 						for _, c := range closesRaw {
 							if price, ok := c.(float64); ok && price > 0 {
@@ -200,7 +200,7 @@ func (s *StockScreener) FetchTechnicalData(stock *StockData) error {
 							}
 						}
 					}
-					
+
 					if highsRaw, ok := quoteData["high"].([]interface{}); ok {
 						for _, h := range highsRaw {
 							if price, ok := h.(float64); ok && price > 0 {
@@ -208,7 +208,7 @@ func (s *StockScreener) FetchTechnicalData(stock *StockData) error {
 							}
 						}
 					}
-					
+
 					if lowsRaw, ok := quoteData["low"].([]interface{}); ok {
 						for _, l := range lowsRaw {
 							if price, ok := l.(float64); ok && price > 0 {
@@ -216,7 +216,7 @@ func (s *StockScreener) FetchTechnicalData(stock *StockData) error {
 							}
 						}
 					}
-					
+
 					// 計算技術指標並存入stock結構
 					s.calculateTechnicalIndicators(stock, closes, highs, lows)
 				}
@@ -279,15 +279,15 @@ func (s *StockScreener) calculateKDIndicator(closes, highs, lows []float64) KDRe
 
 	// 計算RSV值序列
 	rsvs := make([]float64, 0)
-	
+
 	for i := 8; i < len(closes); i++ {
 		// 取9天區間的最高價、最低價、收盤價
 		start := i - 8
 		end := i + 1
-		
+
 		highest := highs[start]
 		lowest := lows[start]
-		
+
 		for j := start; j < end; j++ {
 			if highs[j] > highest {
 				highest = highs[j]
@@ -296,7 +296,7 @@ func (s *StockScreener) calculateKDIndicator(closes, highs, lows []float64) KDRe
 				lowest = lows[j]
 			}
 		}
-		
+
 		// 計算RSV
 		var rsv float64
 		if highest == lowest {
@@ -314,10 +314,10 @@ func (s *StockScreener) calculateKDIndicator(closes, highs, lows []float64) KDRe
 	// 計算K值和D值 (使用指數移動平均)
 	// K = 2/3 * 前一日K值 + 1/3 * 當日RSV
 	// D = 2/3 * 前一日D值 + 1/3 * 當日K值
-	
+
 	k := 50.0 // 初始K值
 	d := 50.0 // 初始D值
-	
+
 	for _, rsv := range rsvs {
 		k = (2.0/3.0)*k + (1.0/3.0)*rsv
 		d = (2.0/3.0)*d + (1.0/3.0)*k
@@ -325,7 +325,6 @@ func (s *StockScreener) calculateKDIndicator(closes, highs, lows []float64) KDRe
 
 	return KDResult{K: k, D: d}
 }
-
 
 // estimateROE 簡化的ROE估算
 func (s *StockScreener) estimateROE(pe float64) float64 {
@@ -350,26 +349,27 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 	// 這裡簡化處理，實際應該解析完整的股票清單
 	// 先用一些熱門股票做示範
 	stockList := []string{
-		"2330", // 台積電
-		"2454", // 聯發科
-		"2308", // 台達電
-		"2886", // 兆豐金
-		"2884", // 玉山金
-		"2382", // 廣達
-		"3231", // 緯創
-		"2376", // 技嘉
-		"2449", // 京元電
-		"1216", // 統一
-		"2412", // 中華電
-		"0050", // 元大台灣50
-		"0056", // 元大高股息
-		"2603", // 長榮
-		"2609", // 陽明
-		"2881", // 富邦金
-		"2882", // 國泰金
-		"2892", // 第一金
-		"3008", // 大立光
-		"2317", // 鴻海
+		"3379",
+		// "2330", // 台積電
+		// "2454", // 聯發科
+		// "2308", // 台達電
+		// "2886", // 兆豐金
+		// "2884", // 玉山金
+		// "2382", // 廣達
+		// "3231", // 緯創
+		// "2376", // 技嘉
+		// "2449", // 京元電
+		// "1216", // 統一
+		// "2412", // 中華電
+		// "0050", // 元大台灣50
+		// "0056", // 元大高股息
+		// "2603", // 長榮
+		// "2609", // 陽明
+		// "2881", // 富邦金
+		// "2882", // 國泰金
+		// "2892", // 第一金
+		// "3008", // 大立光
+		// "2317", // 鴻海
 	}
 
 	return stockList, nil
@@ -413,51 +413,192 @@ func (s *StockScreener) ScreenStocks(stocks []string) ([]*StockData, error) {
 	return qualifiedStocks, nil
 }
 
-// meetsScreeningCriteria 檢查是否符合篩選條件
+// meetsScreeningCriteria 檢查是否符合篩選條件 (分段篩選)
 func (s *StockScreener) meetsScreeningCriteria(stock *StockData) bool {
-	passed := true
+	fmt.Printf("\n🔍 開始篩選股票: %s (%s)\n", stock.Code, stock.Name)
+
+	// 第一階段：基本財務健康度檢查 (必須條件)
+	stage1Passed, stage1Reasons := s.checkStage1Fundamentals(stock)
+
+	if !stage1Passed {
+		fmt.Printf("❌ %s 第一階段未通過: %s\n", stock.Code, strings.Join(stage1Reasons, ", "))
+		return false
+	}
+
+	fmt.Printf("✅ %s 通過第一階段 (基本財務健康度)\n", stock.Code)
+
+	// 第二階段：投資品質評估 (優先條件)
+	stage2Passed, stage2Reasons := s.checkStage2Quality(stock)
+
+	if !stage2Passed {
+		fmt.Printf("⚠️  %s 第二階段未完全通過: %s\n", stock.Code, strings.Join(stage2Reasons, ", "))
+		fmt.Printf("   但仍可列入候選清單\n")
+	} else {
+		fmt.Printf("✅ %s 通過第二階段 (投資品質)\n", stock.Code)
+	}
+
+	// 第三階段：技術面時機判斷 (參考條件)
+	stage3Passed, stage3Reasons := s.checkStage3Technical(stock)
+
+	if !stage3Passed {
+		fmt.Printf("⚠️  %s 技術面時機: %s\n", stock.Code, strings.Join(stage3Reasons, ", "))
+	} else {
+		fmt.Printf("✅ %s 技術面時機良好\n", stock.Code)
+	}
+
+	// 只要通過第一階段就納入候選
+	fmt.Printf("📈 %s 綜合評估: 納入候選清單\n", stock.Code)
+	return stage1Passed
+}
+
+// checkStage1Fundamentals 第一階段：基本財務健康度檢查
+func (s *StockScreener) checkStage1Fundamentals(stock *StockData) (bool, []string) {
 	reasons := []string{}
 
-	// 基本面條件檢查
-	if stock.ROE < s.criteria.MinROE {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("ROE %.1f%% < %.1f%%", stock.ROE, s.criteria.MinROE))
+	fmt.Printf("   📊 財務健康度檢查:\n")
+
+	// 極端負面條件 (絕對排除)
+	if stock.ROE <= 0 {
+		reasons = append(reasons, "ROE為負數或零")
 	}
-	if stock.RevenueGrowth < s.criteria.MinRevenueGrowth {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("營收成長 %.1f%% < %.1f%%", stock.RevenueGrowth, s.criteria.MinRevenueGrowth))
+	if stock.DebtRatio >= 80.0 {
+		reasons = append(reasons, fmt.Sprintf("負債比過高 %.1f%% (>80%%)", stock.DebtRatio))
 	}
-	if stock.DebtRatio > s.criteria.MaxDebtRatio {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("負債比 %.1f%% > %.1f%%", stock.DebtRatio, s.criteria.MaxDebtRatio))
-	}
-	if stock.DividendYears < s.criteria.MinDividendYears {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("配息年數 %d年 < %d年", stock.DividendYears, s.criteria.MinDividendYears))
+	if stock.RevenueGrowth <= -20.0 {
+		reasons = append(reasons, fmt.Sprintf("營收大幅衰退 %.1f%% (<-20%%)", stock.RevenueGrowth))
 	}
 
-	// 技術面條件檢查
-	if s.criteria.RequireMA60Above && stock.Price < stock.MA60 {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("股價 %.2f < MA60 %.2f", stock.Price, stock.MA60))
-	}
-	if stock.KValue < s.criteria.MinKValue || stock.KValue > s.criteria.MaxKValue {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("K值 %.1f 不在 %.1f-%.1f 範圍", stock.KValue, s.criteria.MinKValue, s.criteria.MaxKValue))
-	}
-	if stock.DValue < s.criteria.MinDValue || stock.DValue > s.criteria.MaxDValue {
-		passed = false
-		reasons = append(reasons, fmt.Sprintf("D值 %.1f 不在 %.1f-%.1f 範圍", stock.DValue, s.criteria.MinDValue, s.criteria.MaxDValue))
-	}
+	// 顯示數值
+	fmt.Printf("      ROE: %.1f%% %s\n", stock.ROE, s.getStatusIcon(stock.ROE > 0))
+	fmt.Printf("      負債比: %.1f%% %s\n", stock.DebtRatio, s.getStatusIcon(stock.DebtRatio < 80.0))
+	fmt.Printf("      營收成長: %.1f%% %s\n", stock.RevenueGrowth, s.getStatusIcon(stock.RevenueGrowth > -20.0))
 
-	// 顯示篩選結果
-	if passed {
-		fmt.Printf("✅ %s 通過篩選\n", stock.Code)
+	return len(reasons) == 0, reasons
+}
+
+// checkStage2Quality 第二階段：投資品質評估
+func (s *StockScreener) checkStage2Quality(stock *StockData) (bool, []string) {
+	reasons := []string{}
+	passCount := 0
+	totalChecks := 4
+
+	fmt.Printf("   💎 投資品質評估:\n")
+
+	// ROE品質檢查
+	if stock.ROE >= 15.0 {
+		fmt.Printf("      ROE: %.1f%% ✅ (優秀)\n", stock.ROE)
+		passCount++
+	} else if stock.ROE >= 10.0 {
+		fmt.Printf("      ROE: %.1f%% 🟡 (良好)\n", stock.ROE)
+		passCount++
 	} else {
-		fmt.Printf("❌ %s 未通過篩選: %s\n", stock.Code, strings.Join(reasons, ", "))
+		fmt.Printf("      ROE: %.1f%% ❌ (偏低)\n", stock.ROE)
+		reasons = append(reasons, fmt.Sprintf("ROE偏低 %.1f%%", stock.ROE))
 	}
 
-	return passed
+	// 營收成長檢查
+	if stock.RevenueGrowth >= 10.0 {
+		fmt.Printf("      營收成長: %.1f%% ✅ (高成長)\n", stock.RevenueGrowth)
+		passCount++
+	} else if stock.RevenueGrowth >= 0 {
+		fmt.Printf("      營收成長: %.1f%% 🟡 (穩定)\n", stock.RevenueGrowth)
+		passCount++
+	} else {
+		fmt.Printf("      營收成長: %.1f%% ❌ (衰退)\n", stock.RevenueGrowth)
+		reasons = append(reasons, fmt.Sprintf("營收衰退 %.1f%%", stock.RevenueGrowth))
+	}
+
+	// 負債比檢查
+	if stock.DebtRatio <= 30.0 {
+		fmt.Printf("      負債比: %.1f%% ✅ (優秀)\n", stock.DebtRatio)
+		passCount++
+	} else if stock.DebtRatio <= 50.0 {
+		fmt.Printf("      負債比: %.1f%% 🟡 (可接受)\n", stock.DebtRatio)
+		passCount++
+	} else {
+		fmt.Printf("      負債比: %.1f%% ❌ (偏高)\n", stock.DebtRatio)
+		reasons = append(reasons, fmt.Sprintf("負債比偏高 %.1f%%", stock.DebtRatio))
+	}
+
+	// 配息穩定性檢查
+	if stock.DividendYears >= 5 {
+		fmt.Printf("      配息年數: %d年 ✅ (穩定)\n", stock.DividendYears)
+		passCount++
+	} else if stock.DividendYears >= 3 {
+		fmt.Printf("      配息年數: %d年 🟡 (尚可)\n", stock.DividendYears)
+		passCount++
+	} else {
+		fmt.Printf("      配息年數: %d年 ❌ (不穩定)\n", stock.DividendYears)
+		reasons = append(reasons, fmt.Sprintf("配息不穩定 %d年", stock.DividendYears))
+	}
+
+	// 至少通過60%的品質檢查
+	qualityPassed := float64(passCount)/float64(totalChecks) >= 0.6
+	fmt.Printf("      品質評分: %d/%d (%.0f%%)\n", passCount, totalChecks, float64(passCount)/float64(totalChecks)*100)
+
+	return qualityPassed, reasons
+}
+
+// checkStage3Technical 第三階段：技術面時機判斷
+func (s *StockScreener) checkStage3Technical(stock *StockData) (bool, []string) {
+	reasons := []string{}
+	passCount := 0
+	totalChecks := 3
+
+	fmt.Printf("   📈 技術面時機評估:\n")
+
+	// MA60趨勢檢查
+	if stock.Price > 0 && stock.MA60 > 0 {
+		priceDiff := ((stock.Price - stock.MA60) / stock.MA60) * 100
+		if priceDiff >= 5.0 {
+			fmt.Printf("      股價vs MA60: %.2f vs %.2f (+%.1f%%) ✅ (強勢)\n", stock.Price, stock.MA60, priceDiff)
+			passCount++
+		} else if priceDiff >= 0 {
+			fmt.Printf("      股價vs MA60: %.2f vs %.2f (+%.1f%%) 🟡 (站穩)\n", stock.Price, stock.MA60, priceDiff)
+			passCount++
+		} else {
+			fmt.Printf("      股價vs MA60: %.2f vs %.2f (%.1f%%) ❌ (偏弱)\n", stock.Price, stock.MA60, priceDiff)
+			reasons = append(reasons, fmt.Sprintf("跌破MA60 %.1f%%", priceDiff))
+		}
+	}
+
+	// KD指標檢查
+	if stock.KValue >= 50 && stock.KValue <= 80 {
+		fmt.Printf("      K值: %.1f ✅ (買進區間)\n", stock.KValue)
+		passCount++
+	} else if stock.KValue >= 30 && stock.KValue < 90 {
+		fmt.Printf("      K值: %.1f 🟡 (可觀察)\n", stock.KValue)
+		passCount++
+	} else {
+		fmt.Printf("      K值: %.1f ❌ (時機不佳)\n", stock.KValue)
+		reasons = append(reasons, fmt.Sprintf("K值不在理想區間 %.1f", stock.KValue))
+	}
+
+	// D值檢查
+	if stock.DValue >= 50 && stock.DValue <= 80 {
+		fmt.Printf("      D值: %.1f ✅ (買進區間)\n", stock.DValue)
+		passCount++
+	} else if stock.DValue >= 30 && stock.DValue < 90 {
+		fmt.Printf("      D值: %.1f 🟡 (可觀察)\n", stock.DValue)
+		passCount++
+	} else {
+		fmt.Printf("      D值: %.1f ❌ (時機不佳)\n", stock.DValue)
+		reasons = append(reasons, fmt.Sprintf("D值不在理想區間 %.1f", stock.DValue))
+	}
+
+	// 技術面通過率
+	technicalPassed := float64(passCount)/float64(totalChecks) >= 0.5
+	fmt.Printf("      技術評分: %d/%d (%.0f%%)\n", passCount, totalChecks, float64(passCount)/float64(totalChecks)*100)
+
+	return technicalPassed, reasons
+}
+
+// getStatusIcon 獲取狀態圖示
+func (s *StockScreener) getStatusIcon(passed bool) string {
+	if passed {
+		return "✅"
+	}
+	return "❌"
 }
 
 // calculateScore 計算綜合評分
@@ -641,18 +782,19 @@ func (s *StockScreener) buildYahooSymbol(code string) string {
 	// 上市股票: XXXX.TW (如 2330.TW)
 	// 上櫃股票: XXXX.TWO (但大多數也可用 .TW)
 	// ETF: XXXX.TW (如 0050.TW)
-	
+
 	// 特殊處理某些已知的上櫃股票
 	otcStocks := map[string]bool{
 		"6000": true, // 鈊象電子
 		"6005": true, // 群益證
+		"3379": true,
 		// 可以根據需要添加更多上櫃股票
 	}
-	
+
 	if otcStocks[code] {
 		return code + ".TWO"
 	}
-	
+
 	// 大部分情況使用 .TW 後綴
 	return code + ".TW"
 }

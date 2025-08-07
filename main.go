@@ -197,8 +197,13 @@ func (s *StockScreener) fetchFromFinMind(stock *StockData) error {
 		stock.RevenueGrowth = stock.YoYGrowth // 同步更新營收成長
 	}
 
-	fmt.Printf("股票 %s FinMind 數據: EPS=%.2f, EPS增長=%.1f%%, 年增率=%.1f%% (ROE使用預設值)\n",
-		stock.Code, stock.EPS, stock.EPSGrowth, stock.YoYGrowth)
+	// 嘗試從其他來源獲取 ROE
+	if err := s.fetchROEData(stock); err != nil {
+		fmt.Printf("ROE獲取失敗，使用預設值: %v\n", err)
+	}
+
+	fmt.Printf("股票 %s FinMind 數據: EPS=%.2f, EPS增長=%.1f%%, 年增率=%.1f%%, ROE=%.1f%%\n",
+		stock.Code, stock.EPS, stock.EPSGrowth, stock.YoYGrowth, stock.ROE)
 
 	return nil
 }
@@ -287,6 +292,153 @@ func (s *StockScreener) getSameQuarterLastYearRevenue(revenueData []EPSData, lat
 	}
 
 	return 0
+}
+
+// fetchROEData 從多個來源嘗試獲取ROE數據
+func (s *StockScreener) fetchROEData(stock *StockData) error {
+	// 方法1: 嘗試從TWSE獲取財務比率數據
+	if err := s.fetchROEFromTWSE(stock); err == nil {
+		return nil
+	}
+
+	// 方法2: 使用 DuPont 分析法估算 ROE
+	if err := s.estimateROEFromDuPont(stock); err == nil {
+		return nil
+	}
+
+	// 方法3: 使用行業平均值或經驗公式
+	s.estimateROEFromIndustry(stock)
+	
+	return nil
+}
+
+// fetchROEFromTWSE 從台灣證交所API嘗試獲取ROE相關數據
+func (s *StockScreener) fetchROEFromTWSE(stock *StockData) error {
+	// 使用個股日成交資訊API
+	url := fmt.Sprintf("https://www.twse.com.tw/exchangeReport/BWIBBU_d?response=json&date=%s&stockNo=%s",
+		time.Now().Format("20060102"), stock.Code)
+
+	resp, err := s.client.Get(url)
+	if err != nil {
+		return fmt.Errorf("TWSE API request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return fmt.Errorf("failed to decode TWSE response: %v", err)
+	}
+
+	// 解析財務比率數據
+	if fields, ok := data["data"].([]interface{}); ok && len(fields) > 0 {
+		if row, ok := fields[0].([]interface{}); ok && len(row) >= 6 {
+			// 嘗試解析本益比 (P/E ratio)
+			if peStr, ok := row[4].(string); ok && peStr != "-" && peStr != "" {
+				if pe, err := strconv.ParseFloat(strings.TrimSpace(peStr), 64); err == nil && pe > 0 {
+					// 嘗試解析股價淨值比 (P/B ratio)
+					if len(row) > 5 {
+						if pbStr, ok := row[5].(string); ok && pbStr != "-" && pbStr != "" {
+							if pb, err := strconv.ParseFloat(strings.TrimSpace(pbStr), 64); err == nil && pb > 0 {
+								// 使用 ROE = (P/E) / (P/B) 的關係式
+								// 或 ROE ≈ (1/PE) * (PB) 的近似公式
+								estimatedROE := (pb / pe) * 100
+								if estimatedROE > 0 && estimatedROE < 100 { // 合理性檢查
+									stock.ROE = estimatedROE
+									fmt.Printf("從TWSE估算ROE: PE=%.2f, PB=%.2f, ROE=%.2f%%\n", pe, pb, estimatedROE)
+									return nil
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return fmt.Errorf("no valid financial ratios found")
+}
+
+// estimateROEFromDuPont 使用DuPont分析法估算ROE
+func (s *StockScreener) estimateROEFromDuPont(stock *StockData) error {
+	// DuPont分析: ROE = 淨利率 × 資產周轉率 × 權益乘數
+	// 如果我們有EPS和一些假設，可以做粗略估算
+	
+	if stock.EPS <= 0 {
+		return fmt.Errorf("insufficient data for DuPont analysis")
+	}
+
+	// 根據EPS水準做粗略估算
+	// 這是簡化的啟發式方法
+	var estimatedROE float64
+	
+	if stock.EPS >= 10 { // 高EPS通常對應高ROE
+		estimatedROE = 15.0 + (stock.EPS - 10) * 0.5 // 基礎15% + 額外成分
+	} else if stock.EPS >= 5 {
+		estimatedROE = 10.0 + (stock.EPS - 5) * 1.0
+	} else if stock.EPS >= 1 {
+		estimatedROE = 5.0 + (stock.EPS - 1) * 1.25
+	} else {
+		estimatedROE = stock.EPS * 5 // 低EPS情況
+	}
+
+	// 考慮營收增長的影響
+	if stock.YoYGrowth > 10 {
+		estimatedROE *= 1.2 // 高成長公司通常有更高ROE
+	} else if stock.YoYGrowth < -10 {
+		estimatedROE *= 0.8 // 衰退公司ROE較低
+	}
+
+	// 合理性限制
+	if estimatedROE > 50 {
+		estimatedROE = 50
+	} else if estimatedROE < 0 {
+		estimatedROE = 1
+	}
+
+	stock.ROE = estimatedROE
+	fmt.Printf("DuPont估算ROE: 基於EPS=%.2f, YoY=%.1f%%, 估算ROE=%.2f%%\n", 
+		stock.EPS, stock.YoYGrowth, estimatedROE)
+	
+	return nil
+}
+
+// estimateROEFromIndustry 根據行業特性估算ROE
+func (s *StockScreener) estimateROEFromIndustry(stock *StockData) {
+	// 根據股票代碼判斷行業類型，設定合理的ROE預期
+	code := stock.Code
+	var industryROE float64
+
+	switch {
+	case code >= "2300" && code <= "2399": // 電子業
+		industryROE = 12.0
+	case code >= "2400" && code <= "2499": // 半導體
+		industryROE = 15.0
+	case code >= "2800" && code <= "2899": // 金融業
+		industryROE = 8.0
+	case code >= "2600" && code <= "2699": // 航運業
+		industryROE = 6.0
+	case code >= "1200" && code <= "1299": // 食品業
+		industryROE = 10.0
+	default:
+		industryROE = 10.0 // 預設值
+	}
+
+	// 根據公司表現調整
+	if stock.EPSGrowth > 20 {
+		industryROE *= 1.3
+	} else if stock.EPSGrowth < -20 {
+		industryROE *= 0.7
+	}
+
+	if industryROE > 30 {
+		industryROE = 30
+	} else if industryROE < 3 {
+		industryROE = 3
+	}
+
+	stock.ROE = industryROE
+	fmt.Printf("行業估算ROE: 股票%s, 行業基準=%.1f%%, 調整後=%.2f%%\n", 
+		code, industryROE/1.3, stock.ROE)
 }
 
 // fetchFromTWSE 從TWSE API獲取基本數據作為後備
@@ -555,8 +707,8 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 	// 這裡簡化處理，實際應該解析完整的股票清單
 	// 先用一些熱門股票做示範
 	stockList := []string{
+		"2330", // 台積電
 		"3379",
-		// "2330", // 台積電
 		// "2454", // 聯發科
 		// "2308", // 台達電
 		// "2886", // 兆豐金

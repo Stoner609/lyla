@@ -299,22 +299,231 @@ func (s *StockScreener) getSameQuarterLastYearRevenue(revenueData []EPSData, lat
 	return 0
 }
 
-// fetchROEData 從多個來源嘗試獲取ROE數據
+// fetchROEData 從FinMind API計算精確的ROE數據
 func (s *StockScreener) fetchROEData(stock *StockData) error {
-	// 方法1: 嘗試從TWSE獲取財務比率數據
+	// 使用精確的ROE計算方法：ROE = 本期淨利 / 平均股東權益 * 100%
+	if err := s.calculatePreciseROE(stock); err == nil {
+		return nil
+	}
+
+	// 備用方法1: 嘗試從TWSE獲取財務比率數據
 	if err := s.fetchROEFromTWSE(stock); err == nil {
 		return nil
 	}
 
-	// 方法2: 使用 DuPont 分析法估算 ROE
+	// 備用方法2: 使用 DuPont 分析法估算 ROE
 	if err := s.estimateROEFromDuPont(stock); err == nil {
 		return nil
 	}
 
-	// 方法3: 使用行業平均值或經驗公式
+	// 備用方法3: 使用行業平均值或經驗公式
 	s.estimateROEFromIndustry(stock)
 
 	return nil
+}
+
+// calculatePreciseROE 使用FinMind API精確計算ROE
+func (s *StockScreener) calculatePreciseROE(stock *StockData) error {
+	// 步驟1: 獲取最新本期淨利（分子）
+	netIncome, incomeDate, err := s.fetchNetIncome(stock.Code)
+	if err != nil {
+		return fmt.Errorf("無法獲取淨利數據: %v", err)
+	}
+
+	// 步驟2: 獲取股東權益數據（分母）
+	avgEquity, err := s.fetchAverageEquity(stock.Code, incomeDate)
+	if err != nil {
+		return fmt.Errorf("無法獲取權益數據: %v", err)
+	}
+
+	// 步驟3: 計算ROE
+	if avgEquity > 0 && netIncome != 0 {
+		roe := (netIncome / avgEquity) * 100
+		stock.ROE = roe
+		
+		fmt.Printf("📊 精確ROE計算 [%s]:\n", stock.Code)
+		fmt.Printf("   本期淨利: %.0f 元 (日期: %s)\n", netIncome, incomeDate)
+		fmt.Printf("   平均股東權益: %.0f 元\n", avgEquity)
+		fmt.Printf("   ROE = %.0f / %.0f × 100%% = %.2f%%\n", 
+			netIncome, avgEquity, roe)
+		
+		return nil
+	}
+
+	return fmt.Errorf("ROE計算數據不足: netIncome=%.0f, avgEquity=%.0f", netIncome, avgEquity)
+}
+
+// fetchNetIncome 從FinMind獲取最新本期淨利
+func (s *StockScreener) fetchNetIncome(stockCode string) (float64, string, error) {
+	// 獲取今年的財務數據
+	startDate := time.Now().Format("2006") + "-01-01"
+	url := fmt.Sprintf("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockFinancialStatements&data_id=%s&start_date=%s",
+		stockCode, startDate)
+
+	resp, err := s.client.Get(url)
+	if err != nil {
+		return 0, "", fmt.Errorf("API請求失敗: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response struct {
+		Data []struct {
+			Date       string  `json:"date"`
+			StockID    string  `json:"stock_id"`
+			Type       string  `json:"type"`
+			Value      float64 `json:"value"`
+			OriginName string  `json:"origin_name"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return 0, "", fmt.Errorf("解析API回應失敗: %v", err)
+	}
+
+	// 尋找本期淨利（IncomeAfterTaxes）
+	var latestNetIncome float64
+	var latestDate string
+
+	for _, item := range response.Data {
+		// 只尋找確切的 IncomeAfterTaxes 類型（稅後本期淨利）
+		if item.Type == "IncomeAfterTaxes" {
+			if item.Date > latestDate {
+				latestDate = item.Date
+				latestNetIncome = item.Value
+				// 調試：顯示找到的淨利數據
+				if stockCode == "2328" {
+					fmt.Printf("     找到淨利數據: %s, Type: %s, OriginName: %s, Value: %.0f\n", 
+						item.Date, item.Type, item.OriginName, item.Value)
+				}
+			}
+		}
+	}
+
+	if latestDate == "" {
+		return 0, "", fmt.Errorf("未找到本期淨利數據")
+	}
+
+	return latestNetIncome, latestDate, nil
+}
+
+// fetchAverageEquity 獲取平均股東權益
+func (s *StockScreener) fetchAverageEquity(stockCode, incomeDate string) (float64, error) {
+	// 解析收入日期，判斷需要的權益日期
+	incomeTime, err := time.Parse("2006-01-02", incomeDate)
+	if err != nil {
+		return 0, fmt.Errorf("日期解析失敗: %v", err)
+	}
+
+	// 計算需要的兩個權益日期
+	var currentQuarterDate, previousQuarterDate string
+	
+	// 根據收入日期判斷季度
+	switch incomeTime.Month() {
+	case time.March: // Q1
+		currentQuarterDate = fmt.Sprintf("%d-03-31", incomeTime.Year())
+		previousQuarterDate = fmt.Sprintf("%d-12-31", incomeTime.Year()-1)
+	case time.June: // Q2
+		currentQuarterDate = fmt.Sprintf("%d-06-30", incomeTime.Year())
+		previousQuarterDate = fmt.Sprintf("%d-03-31", incomeTime.Year())
+	case time.September: // Q3
+		currentQuarterDate = fmt.Sprintf("%d-09-30", incomeTime.Year())
+		previousQuarterDate = fmt.Sprintf("%d-06-30", incomeTime.Year())
+	case time.December: // Q4
+		currentQuarterDate = fmt.Sprintf("%d-12-31", incomeTime.Year())
+		previousQuarterDate = fmt.Sprintf("%d-09-30", incomeTime.Year())
+	default:
+		// 如果是其他月份，使用最近的季度
+		if incomeTime.Month() >= time.January && incomeTime.Month() <= time.March {
+			currentQuarterDate = fmt.Sprintf("%d-03-31", incomeTime.Year())
+			previousQuarterDate = fmt.Sprintf("%d-12-31", incomeTime.Year()-1)
+		} else {
+			currentQuarterDate = fmt.Sprintf("%d-03-31", incomeTime.Year())
+			previousQuarterDate = fmt.Sprintf("%d-12-31", incomeTime.Year()-1)
+		}
+	}
+
+	// 獲取資產負債表數據
+	startDate := fmt.Sprintf("%d-01-01", incomeTime.Year()-1) // 獲取前一年的數據以確保完整
+	url := fmt.Sprintf("https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockBalanceSheet&data_id=%s&start_date=%s",
+		stockCode, startDate)
+
+	resp, err := s.client.Get(url)
+	if err != nil {
+		return 0, fmt.Errorf("資產負債表API請求失敗: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response struct {
+		Data []struct {
+			Date       string  `json:"date"`
+			StockID    string  `json:"stock_id"`
+			Type       string  `json:"type"`
+			Value      float64 `json:"value"`
+			OriginName string  `json:"origin_name"`
+		} `json:"data"`
+		Msg string `json:"msg"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return 0, fmt.Errorf("解析資產負債表回應失敗: %v", err)
+	}
+
+	// 尋找權益總額數據
+	equityData := make(map[string]float64)
+
+	for _, item := range response.Data {
+		// 尋找權益總額（Equity）- 確保使用正確的絕對值，不是百分比
+		if item.Type == "Equity" && !strings.Contains(item.OriginName, "_per") {
+			equityData[item.Date] = item.Value
+			// 調試：顯示找到的權益數據 (針對2328)
+			if stockCode == "2328" {
+				fmt.Printf("     找到權益數據: %s = %.0f 元\n", item.Date, item.Value)
+			}
+		}
+	}
+
+	// 獲取兩個季度的權益數據
+	currentEquity, currentExists := equityData[currentQuarterDate]
+	previousEquity, previousExists := equityData[previousQuarterDate]
+
+	fmt.Printf("   權益數據查找:\n")
+	fmt.Printf("     當季日期 (%s): %.0f 元 [%t]\n", currentQuarterDate, currentEquity, currentExists)
+	fmt.Printf("     前季日期 (%s): %.0f 元 [%t]\n", previousQuarterDate, previousEquity, previousExists)
+
+	// 如果找不到精確日期，嘗試找最近的日期
+	if !currentExists || !previousExists {
+		// 找到所有可用的權益日期，選擇最近的兩個
+		var availableDates []string
+		for date := range equityData {
+			availableDates = append(availableDates, date)
+		}
+		
+		if len(availableDates) >= 2 {
+			sort.Strings(availableDates) // 按日期排序
+			
+			// 取最新的兩個日期
+			latest := availableDates[len(availableDates)-1]
+			secondLatest := availableDates[len(availableDates)-2]
+			
+			currentEquity = equityData[latest]
+			previousEquity = equityData[secondLatest]
+			
+			fmt.Printf("   使用最近的權益數據:\n")
+			fmt.Printf("     最新日期 (%s): %.0f 元\n", latest, currentEquity)
+			fmt.Printf("     次新日期 (%s): %.0f 元\n", secondLatest, previousEquity)
+		} else {
+			return 0, fmt.Errorf("權益數據不足，僅找到 %d 筆記錄", len(availableDates))
+		}
+	}
+
+	// 計算平均權益
+	if currentEquity > 0 && previousEquity > 0 {
+		avgEquity := (currentEquity + previousEquity) / 2
+		return avgEquity, nil
+	}
+
+	return 0, fmt.Errorf("權益數據無效: current=%.0f, previous=%.0f", currentEquity, previousEquity)
 }
 
 // fetchROEFromTWSE 從台灣證交所API嘗試獲取ROE相關數據
@@ -807,11 +1016,12 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 	// 這裡簡化處理，實際應該解析完整的股票清單
 	// 先用一些熱門股票做示範
 	stockList := []string{
+		"2328", // 廣宇 - 用於測試ROE算法
 		"2330", // 台積電
-		"3379",
+		// "3379",
 		// "2454", // 聯發科
 		// "2308", // 台達電
-		"2886", // 兆豐金
+		// "2886", // 兆豐金
 		// "2884", // 玉山金
 		// "2382", // 廣達
 		// "3231", // 緯創
@@ -822,12 +1032,12 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 		// "0050", // 元大台灣50
 		// "0056", // 元大高股息
 		// "2603", // 長榮
-		"2609", // 陽明
+		// "2609", // 陽明
 		// "2881", // 富邦金
 		// "2882", // 國泰金
 		// "2892", // 第一金
 		// "3008", // 大立光
-		"2317", // 鴻海
+		// "2317", // 鴻海
 	}
 
 	return stockList, nil

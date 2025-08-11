@@ -340,13 +340,13 @@ func (s *StockScreener) calculatePreciseROE(stock *StockData) error {
 	if avgEquity > 0 && netIncome != 0 {
 		roe := (netIncome / avgEquity) * 100
 		stock.ROE = roe
-		
+
 		fmt.Printf("📊 精確ROE計算 [%s]:\n", stock.Code)
 		fmt.Printf("   本期淨利: %.0f 元 (日期: %s)\n", netIncome, incomeDate)
 		fmt.Printf("   平均股東權益: %.0f 元\n", avgEquity)
-		fmt.Printf("   ROE = %.0f / %.0f × 100%% = %.2f%%\n", 
+		fmt.Printf("   ROE = %.0f / %.0f × 100%% = %.2f%%\n",
 			netIncome, avgEquity, roe)
-		
+
 		return nil
 	}
 
@@ -393,7 +393,7 @@ func (s *StockScreener) fetchNetIncome(stockCode string) (float64, string, error
 				latestNetIncome = item.Value
 				// 調試：顯示找到的淨利數據
 				if stockCode == "2328" {
-					fmt.Printf("     找到淨利數據: %s, Type: %s, OriginName: %s, Value: %.0f\n", 
+					fmt.Printf("     找到淨利數據: %s, Type: %s, OriginName: %s, Value: %.0f\n",
 						item.Date, item.Type, item.OriginName, item.Value)
 				}
 			}
@@ -417,7 +417,7 @@ func (s *StockScreener) fetchAverageEquity(stockCode, incomeDate string) (float6
 
 	// 計算需要的兩個權益日期
 	var currentQuarterDate, previousQuarterDate string
-	
+
 	// 根據收入日期判斷季度
 	switch incomeTime.Month() {
 	case time.March: // Q1
@@ -498,17 +498,17 @@ func (s *StockScreener) fetchAverageEquity(stockCode, incomeDate string) (float6
 		for date := range equityData {
 			availableDates = append(availableDates, date)
 		}
-		
+
 		if len(availableDates) >= 2 {
 			sort.Strings(availableDates) // 按日期排序
-			
+
 			// 取最新的兩個日期
 			latest := availableDates[len(availableDates)-1]
 			secondLatest := availableDates[len(availableDates)-2]
-			
+
 			currentEquity = equityData[latest]
 			previousEquity = equityData[secondLatest]
-			
+
 			fmt.Printf("   使用最近的權益數據:\n")
 			fmt.Printf("     最新日期 (%s): %.0f 元\n", latest, currentEquity)
 			fmt.Printf("     次新日期 (%s): %.0f 元\n", secondLatest, previousEquity)
@@ -1016,8 +1016,9 @@ func (s *StockScreener) FetchStockList() ([]string, error) {
 	// 這裡簡化處理，實際應該解析完整的股票清單
 	// 先用一些熱門股票做示範
 	stockList := []string{
-		"2328", // 廣宇 - 用於測試ROE算法
-		"2330", // 台積電
+		// "2328", // 廣宇 - 用於測試ROE算法
+		// "2330", // 台積電
+		"3515", // 華擎
 		// "3379",
 		// "2454", // 聯發科
 		// "2308", // 台達電
